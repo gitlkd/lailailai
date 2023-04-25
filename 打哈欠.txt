@@ -1,0 +1,125 @@
+import cv2
+import dlib
+import numpy as np
+
+cap = cv2.VideoCapture(0)
+
+detector = dlib.get_frontal_face_detector()
+predictor = dlib.shape_predictor("D:\shiyan\p\shape_predictor_68_face_landmarks.dat")
+
+
+# 定义一个函数来计算EAR值
+def get_ear(eye_points, facial_landmarks):
+    # 计算眼睛的高度和宽度
+    left_point = (facial_landmarks.part(eye_points[0]).x, facial_landmarks.part(eye_points[0]).y)
+    right_point = (facial_landmarks.part(eye_points[3]).x, facial_landmarks.part(eye_points[3]).y)
+    center_top = (facial_landmarks.part(eye_points[1]).x, facial_landmarks.part(eye_points[1]).y)
+    center_bottom = (facial_landmarks.part(eye_points[5]).x, facial_landmarks.part(eye_points[5]).y)
+
+    eye_width = np.linalg.norm(np.array(left_point) - np.array(right_point))
+    eye_height = np.linalg.norm(np.array(center_top) - np.array(center_bottom))
+
+    # 计算EAR值
+    ear = eye_height / eye_width
+
+    return ear
+
+
+# 定义左右眼的关键点索引
+left_eye_landmarks = [36, 37, 38, 39, 40, 41]
+right_eye_landmarks = [42, 43, 44, 45, 46, 47]
+
+# 定义嘴巴的关键点索引
+mouth_landmarks = [48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59]
+
+# 定义一个滑动窗口来统计perclos值
+window_size = 10  # 可以根据需要调整窗口大小
+window = []  # 存储窗口内的眼睛状态，1表示闭合，0表示开启
+
+# 定义一个阈值来判断眼睛是否闭合
+eye_close_threshold = 0.25  # 可以根据需要调整阈值
+
+# 定义一个阈值来判断是否为疲劳驾驶
+perclos_threshold = 0.5  # 可以根据需要调整阈值
+
+# 定义一个阈值来判断嘴巴是否张开
+mouth_open_threshold = 0.5  # 可以根据需要调整阈值
+
+while True:
+    _, frame = cap.read()
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+    # 对图像进行高斯滤波和直方图均衡化
+    gray = cv2.GaussianBlur(gray, (5, 5), 0)
+    gray = cv2.equalizeHist(gray)
+
+    faces = detector(gray)
+
+    for face in faces:
+        x1 = face.left()
+        y1 = face.top()
+        x2 = face.right()
+        y2 = face.bottom()
+
+        landmarks = predictor(gray, face)
+
+        # 计算左右眼的EAR值
+        left_eye_ear = get_ear(left_eye_landmarks, landmarks)
+        right_eye_ear = get_ear(right_eye_landmarks, landmarks)
+
+        # 计算平均的EAR值
+        ear = (left_eye_ear + right_eye_ear) / 2
+
+        # 判断眼睛是否闭合，并更新窗口内的状态
+        if ear < eye_close_threshold:
+            eye_state = 1  # 眼睛闭合
+        else:
+            eye_state = 0  # 眼睛开启
+
+        window.append(eye_state)
+
+        # 如果窗口满了，就计算perclos值，并判断是否为疲劳驾驶
+        if len(window) == window_size:
+            perclos = sum(window) / window_size  # perclos为窗口内眼睛闭合的时间比例
+            if perclos > perclos_threshold:
+                fatigue_state = "Fatigue"  # 疲劳驾驶
+            else:
+                fatigue_state = "Normal"  # 正常驾驶
+
+            # 在图像上显示perclos值和疲劳状态
+            cv2.putText(frame, "PERCLOS: {:.2f}".format(perclos), (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            cv2.putText(frame, "Fatigue State: {}".format(fatigue_state), (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 1,
+                        (0, 255, 0), 2)
+
+            # 如果检测到疲劳驾驶，就发出警报声音
+            if fatigue_state == "Fatigue":
+                cv2.putText(frame, "Wake Up!", (200, 200), cv2.FONT_HERSHEY_SIMPLEX, 3, (0, 0, 255), 5)
+                # 这里可以添加一个播放声音文件的函数，比如使用playsound模块
+
+            # 移除窗口内的第一个状态，为下一帧做准备
+            window.pop(0)
+
+        # 计算嘴巴的MAR值
+        mouth_mar = get_ear(mouth_landmarks, landmarks)
+
+        # 在每一帧开始时，用黑色覆盖掉上一帧的提醒区域
+        cv2.rectangle(frame, (20, 100), (200, 140), (0, 0, 0), -1)
+
+        # 判断嘴巴是否张开，并在图像上显示相应的提醒
+        if mouth_mar > mouth_open_threshold:
+            cv2.putText(frame, "Yawning!", (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+
+        # 在每一帧上画出人脸和眼睛和嘴巴的关键点
+        for n in range(0, 68):
+            x = landmarks.part(n).x
+            y = landmarks.part(n).y
+            cv2.circle(frame, (x, y), 2, (0, 255, 0), -1)
+
+    cv2.imshow("Frame", frame)
+
+    key = cv2.waitKey(1)
+    if key == 27:
+        break
+
+cap.release()
+cv2.destroyAllWindows()
